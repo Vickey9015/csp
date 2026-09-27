@@ -272,18 +272,6 @@
   text-transform: uppercase;
 }
 
-.crop {
-  position: absolute;
-  width: 4mm;
-  height: 4mm;
-  pointer-events: none;
-}
-
-.crop.tl { left: -1.6mm; top: -1.6mm; border-top: 0.25mm solid #222; border-left: 0.25mm solid #222; }
-.crop.tr { right: -1.6mm; top: -1.6mm; border-top: 0.25mm solid #222; border-right: 0.25mm solid #222; }
-.crop.bl { left: -1.6mm; bottom: -1.6mm; border-bottom: 0.25mm solid #222; border-left: 0.25mm solid #222; }
-.crop.br { right: -1.6mm; bottom: -1.6mm; border-bottom: 0.25mm solid #222; border-right: 0.25mm solid #222; }
-
 .later {
   max-width: 640px;
 }
