@@ -84,7 +84,219 @@ function rotateToCanvas(bitmap, rotation) {
   return canvas;
 }
 
+const CARD_ASPECT = CARD_WIDTH_MM / CARD_HEIGHT_MM;
+
+function findCardByEdges(source) {
+  const maxSize = 220;
+  const scale = Math.min(1, maxSize / Math.max(source.width, source.height));
+  const width = Math.max(2, Math.round(source.width * scale));
+  const height = Math.max(2, Math.round(source.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  canvas.getContext("2d", { willReadFrequently: true }).drawImage(source, 0, 0, width, height);
+
+  const angles = [0, -0.12, 0.12, -0.2, 0.2];
+  let best = null;
+  for (const angle of angles) {
+    const hit = searchCardRect(canvas, angle);
+    if (!hit) continue;
+    if (!best || hit.score > best.score) best = hit;
+  }
+  if (!best || best.score < 6 || best.border < best.outside * 1.25) return null;
+
+  const corners = insetCorners(
+    best.corners.map((point) => ({ x: point.x / scale, y: point.y / scale })),
+    0.02
+  );
+  if (!isUsableQuad(corners, source.width, source.height)) return null;
+  return { kind: "quad", corners };
+}
+
+function searchCardRect(canvas, angle) {
+  const view = angle ? rotateSmall(canvas, angle) : canvas;
+  const w = view.width;
+  const h = view.height;
+  const data = view.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, w, h).data;
+  const mag = sobelMagnitude(data, w, h);
+  const integral = buildIntegral(mag, w, h);
+  const stride = w + 1;
+  const step = Math.max(3, Math.round(Math.min(w, h) / 40));
+  const minSide = Math.round(Math.min(w, h) * 0.28);
+  let best = null;
+
+  for (const aspect of [CARD_ASPECT, 1 / CARD_ASPECT]) {
+    for (let y1 = step; y1 < h - minSide; y1 += step) {
+      for (let rh = minSide; y1 + rh < h - step; rh += step) {
+        const rw = Math.round(rh * aspect);
+        if (rw < minSide) continue;
+        for (let x1 = step; x1 + rw < w - step; x1 += step) {
+          const x2 = x1 + rw;
+          const y2 = y1 + rh;
+          const scored = scoreRect(integral, stride, w, h, x1, y1, x2, y2);
+          if (!scored) continue;
+          if (!best || scored.score > best.score) best = { x1, y1, x2, y2, ...scored };
+        }
+      }
+    }
+  }
+
+  if (!best) return null;
+  const refined = refineRect(best, integral, stride, w, h);
+  const local = [
+    { x: refined.x1, y: refined.y1 },
+    { x: refined.x2, y: refined.y1 },
+    { x: refined.x2, y: refined.y2 },
+    { x: refined.x1, y: refined.y2 },
+  ];
+  return {
+    ...refined,
+    corners: angle ? local.map((point) => inverseRotate(point, w, h, angle)) : local,
+  };
+}
+
+function rotateSmall(canvas, angle) {
+  const next = document.createElement("canvas");
+  next.width = canvas.width;
+  next.height = canvas.height;
+  const ctx = next.getContext("2d");
+  ctx.fillStyle = cornerColor(canvas);
+  ctx.fillRect(0, 0, next.width, next.height);
+  ctx.translate(canvas.width / 2, canvas.height / 2);
+  ctx.rotate(angle);
+  ctx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+  return next;
+}
+
+function cornerColor(canvas) {
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const spots = [
+    [1, 1],
+    [canvas.width - 2, 1],
+    [1, canvas.height - 2],
+    [canvas.width - 2, canvas.height - 2],
+  ];
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  for (const [x, y] of spots) {
+    const pixel = ctx.getImageData(x, y, 1, 1).data;
+    r += pixel[0];
+    g += pixel[1];
+    b += pixel[2];
+  }
+  return `rgb(${Math.round(r / 4)}, ${Math.round(g / 4)}, ${Math.round(b / 4)})`;
+}
+
+function inverseRotate(point, width, height, angle) {
+  const cx = width / 2;
+  const cy = height / 2;
+  const dx = point.x - cx;
+  const dy = point.y - cy;
+  const cosine = Math.cos(-angle);
+  const sine = Math.sin(-angle);
+  return {
+    x: cx + dx * cosine - dy * sine,
+    y: cy + dx * sine + dy * cosine,
+  };
+}
+
+function refineRect(rect, integral, stride, w, h) {
+  let current = rect;
+  for (const delta of [-4, -2, 2, 4]) {
+    const moves = [
+      { x1: current.x1 + delta },
+      { y1: current.y1 + delta },
+      { x2: current.x2 + delta },
+      { y2: current.y2 + delta },
+    ];
+    for (const move of moves) {
+      const next = {
+        x1: move.x1 ?? current.x1,
+        y1: move.y1 ?? current.y1,
+        x2: move.x2 ?? current.x2,
+        y2: move.y2 ?? current.y2,
+      };
+      if (next.x2 - next.x1 < 12 || next.y2 - next.y1 < 12) continue;
+      if (next.x1 < 1 || next.y1 < 1 || next.x2 >= w - 1 || next.y2 >= h - 1) continue;
+      const aspect = (next.x2 - next.x1) / (next.y2 - next.y1);
+      const landscape = CARD_ASPECT;
+      const near = Math.min(Math.abs(aspect - landscape), Math.abs(aspect - 1 / landscape));
+      if (near > 0.35) continue;
+      const scored = scoreRect(integral, stride, w, h, next.x1, next.y1, next.x2, next.y2);
+      if (scored && scored.score > current.score) current = { ...next, ...scored };
+    }
+  }
+  return current;
+}
+
+function scoreRect(integral, stride, width, height, x1, y1, x2, y2) {
+  const thickness = 2;
+  const outside = 5;
+  if (x1 < outside || y1 < outside || x2 > width - outside || y2 > height - outside) return null;
+  const border = ringMean(integral, stride, x1, y1, x2, y2, thickness);
+  const outer = ringMean(integral, stride, x1 - outside, y1 - outside, x2 + outside, y2 + outside, outside);
+  const areaRatio = ((x2 - x1) * (y2 - y1)) / (width * height);
+  const contrast = border - outer;
+  return {
+    border,
+    outside: outer,
+    score: contrast * (0.55 + areaRatio),
+  };
+}
+
+function ringMean(integral, stride, x1, y1, x2, y2, thickness) {
+  const outer = rectSum(integral, stride, x1, y1, x2, y2);
+  const ix1 = x1 + thickness;
+  const iy1 = y1 + thickness;
+  const ix2 = x2 - thickness;
+  const iy2 = y2 - thickness;
+  if (ix2 <= ix1 || iy2 <= iy1) return 0;
+  const inner = rectSum(integral, stride, ix1, iy1, ix2, iy2);
+  const area = (x2 - x1) * (y2 - y1) - (ix2 - ix1) * (iy2 - iy1);
+  return area > 0 ? (outer - inner) / area : 0;
+}
+
+function rectSum(integral, stride, x1, y1, x2, y2) {
+  return integral[y2 * stride + x2] - integral[y1 * stride + x2] - integral[y2 * stride + x1] + integral[y1 * stride + x1];
+}
+
+function buildIntegral(values, w, h) {
+  const stride = w + 1;
+  const integral = new Float64Array(stride * (h + 1));
+  for (let y = 0; y < h; y++) {
+    let row = 0;
+    for (let x = 0; x < w; x++) {
+      row += values[y * w + x];
+      integral[(y + 1) * stride + x + 1] = integral[y * stride + x + 1] + row;
+    }
+  }
+  return integral;
+}
+
+function sobelMagnitude(data, w, h) {
+  const gray = new Float32Array(w * h);
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    gray[p] = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+  }
+  const mag = new Float32Array(w * h);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      const gx =
+        -gray[i - w - 1] + gray[i - w + 1] - 2 * gray[i - 1] + 2 * gray[i + 1] - gray[i + w - 1] + gray[i + w + 1];
+      const gy =
+        -gray[i - w - 1] - 2 * gray[i - w] - gray[i - w + 1] + gray[i + w - 1] + 2 * gray[i + w] + gray[i + w + 1];
+      mag[i] = Math.hypot(gx, gy);
+    }
+  }
+  return mag;
+}
+
 function detectCard(source) {
+  const edged = findCardByEdges(source);
+  if (edged) return edged;
+
   const scale = Math.min(1, ANALYSIS_MAX / Math.max(source.width, source.height));
   const w = Math.max(2, Math.round(source.width * scale));
   const h = Math.max(2, Math.round(source.height * scale));
@@ -138,7 +350,7 @@ function cardMask(data, w, h) {
     hist[value] += 1;
   }
 
-  const threshold = Math.max(20, otsu(hist, w * h));
+  const threshold = Math.max(12, otsu(hist, w * h));
   const mask = new Uint8Array(w * h);
   let count = 0;
   for (let i = 0; i < dist.length; i++) {
@@ -148,7 +360,7 @@ function cardMask(data, w, h) {
     }
   }
   const ratio = count / (w * h);
-  if (ratio < 0.08 || ratio > 0.92) return null;
+  if (ratio < 0.05 || ratio > 0.97) return null;
   return mask;
 }
 
