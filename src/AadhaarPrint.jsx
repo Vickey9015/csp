@@ -83,8 +83,9 @@ export default function AadhaarPrint() {
           <p className="eyebrow">Printouts</p>
           <h1>Aadhaar</h1>
           <p>
-            Upload the front and back. Each photo is resized to card size and
-            placed on one A4 sheet. Print sends both sides together.
+            Upload the front and back. Extra background is cropped to the card
+            border, then both sides sit in one row at the top of the A4 sheet:
+            front on the left, back on the right.
           </p>
         </div>
         <button type="button" className="submit print-action" disabled={!ready || Boolean(busy)} onClick={printSheet}>
@@ -129,7 +130,7 @@ export default function AadhaarPrint() {
                   {photo ? (
                     <img src={photo.url} alt="" />
                   ) : (
-                    <span>{busy === side.id ? "Resizing…" : "Drop a photo or click to upload"}</span>
+                    <span>{busy === side.id ? "Cropping to the card…" : "Drop a photo or click to upload"}</span>
                   )}
                 </label>
                 <div className="side-actions">
@@ -159,7 +160,7 @@ export default function AadhaarPrint() {
           </div>
           <p className="footnote no-print">
             {ready
-              ? "One A4 sheet. Front is above, back is below, both at card size."
+              ? "One A4 sheet. Front is on the left, back is on the right, both at the top."
               : "The sheet fills in as you upload each side."}
           </p>
         </section>
