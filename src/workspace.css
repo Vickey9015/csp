@@ -236,18 +236,18 @@
 
 .card-slot {
   position: absolute;
+  top: 8mm;
   width: 85.6mm;
   height: 53.98mm;
-  left: 62.2mm;
   background: white;
 }
 
 .card-slot.front {
-  top: 88.5mm;
+  left: 16.4mm;
 }
 
 .card-slot.back {
-  top: 156.5mm;
+  left: 108mm;
 }
 
 .card-slot img {
