@@ -38,11 +38,7 @@ export async function scanDocument(source) {
   try {
     const quad = findBestQuad(cv, src, track);
     if (!quad) return null;
-    const points = insetPoints(
-      quad.map((point) => ({ x: point.x / scale, y: point.y / scale })),
-      0.012
-    );
-    return warpCard(cv, source, points);
+    return quad.map((point) => ({ x: point.x / scale, y: point.y / scale }));
   } catch {
     return null;
   } finally {
@@ -163,15 +159,6 @@ function winding(points) {
   return [points[0], points[3], points[2], points[1]];
 }
 
-function insetPoints(points, amount) {
-  const centerX = points.reduce((sum, point) => sum + point.x, 0) / points.length;
-  const centerY = points.reduce((sum, point) => sum + point.y, 0) / points.length;
-  return points.map((point) => ({
-    x: point.x + (centerX - point.x) * amount,
-    y: point.y + (centerY - point.y) * amount,
-  }));
-}
-
 function longOverShort(points) {
   const long = edgeLength(points[0], points[1]);
   const short = (edgeLength(points[1], points[2]) + edgeLength(points[0], points[3])) / 2;
@@ -180,6 +167,11 @@ function longOverShort(points) {
 
 function edgeLength(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+export async function warpToCard(source, points) {
+  const cv = await loadOpenCv();
+  return warpCard(cv, source, points);
 }
 
 function warpCard(cv, source, points) {
