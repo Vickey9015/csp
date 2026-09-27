@@ -1,3 +1,5 @@
+import { scanDocument } from "./documentScan.js";
+
 const CARD_WIDTH_MM = 85.6;
 const CARD_HEIGHT_MM = 53.98;
 const PRINT_DPI = 300;
@@ -34,14 +36,112 @@ export async function readCardFile(file, rotation = 0) {
   }
 }
 
-function fitCard(bitmap, rotation) {
+async function fitCard(bitmap, rotation) {
   const manual = rotateToCanvas(bitmap, rotation);
+  const scanned = await scanDocument(manual);
+  const prepared = scanned ? trimDarkEdges(scanned) : legacyFit(manual);
+  return paintCard(faceUpright(prepared));
+}
+
+function legacyFit(manual) {
   const skew = estimateSkewDegrees(manual);
   const leveled = Math.abs(skew) >= 0.4 ? rotateFree(manual, skew) : manual;
   const found = detectCard(leveled, { straight: true });
-  const cropped = cropFound(leveled, found);
-  const upright = faceUpright(cropped);
-  return paintCard(upright);
+  return levelCrop(trimDarkEdges(cropFound(leveled, found)));
+}
+
+function levelCrop(source) {
+  const sampleWidth = 180;
+  const sampleHeight = Math.max(2, Math.round((sampleWidth * source.height) / source.width));
+  const sample = document.createElement("canvas");
+  sample.width = sampleWidth;
+  sample.height = sampleHeight;
+  const ctx = sample.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(source, 0, 0, sampleWidth, sampleHeight);
+  const data = ctx.getImageData(0, 0, sampleWidth, sampleHeight).data;
+  const lumAt = (x, y) => {
+    const index = (y * sampleWidth + x) * 4;
+    return data[index] * 0.299 + data[index + 1] * 0.587 + data[index + 2] * 0.114;
+  };
+  let count = 0;
+  let sumX = 0;
+  let sumY = 0;
+  let sumXX = 0;
+  let sumXY = 0;
+  for (let x = 4; x < sampleWidth * 0.5; x += 4) {
+    let y = 0;
+    for (; y < sampleHeight * 0.35; y++) {
+      if (lumAt(x, y) > 155) break;
+    }
+    if (y >= sampleHeight * 0.35) continue;
+    sumX += x;
+    sumY += y;
+    sumXX += x * x;
+    sumXY += x * y;
+    count += 1;
+  }
+  if (count < 8) return source;
+  const slope = (count * sumXY - sumX * sumY) / (count * sumXX - sumX * sumX || 1);
+  const degrees = (Math.atan(slope) * 180) / Math.PI;
+  if (Math.abs(degrees) < 1.4 || Math.abs(degrees) > 8) return source;
+  return trimDarkEdges(rotateFree(source, -degrees));
+}
+
+function trimDarkEdges(source) {
+  const max = 200;
+  const scale = Math.min(1, max / Math.max(source.width, source.height));
+  const width = Math.max(2, Math.round(source.width * scale));
+  const height = Math.max(2, Math.round(source.height * scale));
+  const sample = document.createElement("canvas");
+  sample.width = width;
+  sample.height = height;
+  const ctx = sample.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(source, 0, 0, width, height);
+  const data = ctx.getImageData(0, 0, width, height).data;
+  const lumAt = (x, y) => {
+    const index = (y * width + x) * 4;
+    return data[index] * 0.299 + data[index + 1] * 0.587 + data[index + 2] * 0.114;
+  };
+  const darkShare = (fixed, vertical) => {
+    let dark = 0;
+    const samples = vertical ? 20 : 28;
+    const span = vertical ? height : width;
+    for (let step = 0; step < samples; step++) {
+      const along = Math.min(span - 1, Math.floor(((step + 0.5) * span) / samples));
+      const lum = vertical ? lumAt(fixed, along) : lumAt(along, fixed);
+      if (lum < 100) dark += 1;
+    }
+    return dark / samples;
+  };
+
+  let top = 0;
+  let bottom = height - 1;
+  let left = 0;
+  let right = width - 1;
+  while (top < height * 0.22 && darkShare(top, false) > 0.68) top += 1;
+  while (bottom > height * 0.78 && darkShare(bottom, false) > 0.68) bottom -= 1;
+  while (left < width * 0.22 && darkShare(left, true) > 0.68) left += 1;
+  while (right > width * 0.78 && darkShare(right, true) > 0.68) right -= 1;
+  if (right - left < width * 0.72 || bottom - top < height * 0.72) return source;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(((right - left + 1) / width) * source.width));
+  canvas.height = Math.max(1, Math.round(((bottom - top + 1) / height) * source.height));
+  const out = canvas.getContext("2d");
+  out.imageSmoothingEnabled = true;
+  out.imageSmoothingQuality = "high";
+  out.drawImage(
+    source,
+    (left / width) * source.width,
+    (top / height) * source.height,
+    ((right - left + 1) / width) * source.width,
+    ((bottom - top + 1) / height) * source.height,
+    0,
+    0,
+    canvas.width,
+    canvas.height
+  );
+  return canvas;
 }
 
 function paintCard(source) {
@@ -76,6 +176,14 @@ function cropFound(source, found) {
     width = found.width;
     height = found.height;
   }
+  if (found.kind !== "full") {
+    const x2 = Math.min(source.width, x + width + width * 0.012);
+    const y2 = Math.min(source.height, y + height + height * 0.05);
+    x = Math.max(0, x - width * 0.012);
+    y = Math.max(0, y - height * 0.015);
+    width = x2 - x;
+    height = y2 - y;
+  }
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(width));
   canvas.height = Math.max(1, Math.round(height));
@@ -93,7 +201,14 @@ function faceUpright(source) {
     const counter = rotateToCanvas(image, -90);
     image = headerScore(clockwise) >= headerScore(counter) ? clockwise : counter;
   }
-  if (headerScore(image, "bottom") > headerScore(image, "top") * 1.2 && headerScore(image, "bottom") > 8) {
+  const top = headerScore(image, "top");
+  const bottom = headerScore(image, "bottom");
+  const left = headerScore(image, "left");
+  const right = headerScore(image, "right");
+  const side = Math.max(left, right);
+  if (side > Math.max(top, bottom) * 1.4 && side > 8) {
+    image = rotateToCanvas(image, right >= left ? 90 : -90);
+  } else if (bottom > top * 1.2 && bottom > 8) {
     image = rotateToCanvas(image, 180);
   }
   return image;
@@ -110,22 +225,34 @@ function headerScore(canvas, band = "top") {
   const ctx = sample.getContext("2d", { willReadFrequently: true });
   ctx.drawImage(canvas, 0, 0, width, height);
   const data = ctx.getImageData(0, 0, width, height).data;
-  const start = band === "bottom" ? Math.floor(height * 0.78) : 0;
-  const end = band === "bottom" ? height : Math.ceil(height * 0.22);
-  let score = 0;
-  for (let y = start; y < end; y++) {
-    for (let x = 0; x < width; x += 2) {
+  const region = headerRegion(band, width, height);
+  let saffron = 0;
+  let green = 0;
+  for (let y = region.y0; y < region.y1; y++) {
+    for (let x = region.x0; x < region.x1; x += 2) {
       const i = (y * width + x) * 4;
-      if (isHeaderPixel(data[i], data[i + 1], data[i + 2])) score += 1;
+      const kind = headerKind(data[i], data[i + 1], data[i + 2]);
+      if (kind === "saffron") saffron += 1;
+      if (kind === "green") green += 1;
     }
   }
-  return score;
+  if (saffron < 4 || green < 4) return 0;
+  return Math.min(saffron, green);
 }
 
-function isHeaderPixel(red, green, blue) {
-  const saffron = red > 165 && green > 60 && green < 200 && blue < 120 && red > green + 30 && red > blue + 45;
-  const indiaGreen = green > 85 && green > red + 12 && green > blue + 12 && red < 170 && blue < 150;
-  return saffron || indiaGreen;
+function headerRegion(band, width, height) {
+  if (band === "bottom") return { x0: 0, x1: width, y0: Math.floor(height * 0.78), y1: height };
+  if (band === "left") return { x0: 0, x1: Math.ceil(width * 0.22), y0: 0, y1: height };
+  if (band === "right") return { x0: Math.floor(width * 0.78), x1: width, y0: 0, y1: height };
+  return { x0: 0, x1: width, y0: 0, y1: Math.ceil(height * 0.22) };
+}
+
+function headerKind(red, green, blue) {
+  const saffron = red > 145 && green > 45 && green < 215 && blue < 160 && red > green + 15 && red > blue + 22;
+  const indiaGreen = green > 70 && green > red + 8 && green > blue + 8 && red < 190 && blue < 175;
+  if (saffron) return "saffron";
+  if (indiaGreen) return "green";
+  return "";
 }
 
 function estimateSkewDegrees(source) {
@@ -264,7 +391,7 @@ function findCardByEdges(source, straight = false) {
 
   const corners = insetCorners(
     best.corners.map((point) => ({ x: point.x / scale, y: point.y / scale })),
-    straight ? 0.008 : 0.02
+    straight ? -0.015 : 0.012
   );
   if (!isUsableQuad(corners, source.width, source.height)) return null;
   return { kind: "quad", corners };
@@ -299,11 +426,12 @@ function searchCardRect(canvas, angle) {
   }
 
   if (!pool.length) return null;
-  const maxContrast = pool.reduce((max, item) => Math.max(max, item.contrast), 0);
-  const best = pool
-    .filter((item) => item.contrast >= maxContrast * 0.72)
-    .sort((a, b) => (b.x2 - b.x1) * (b.y2 - b.y1) - (a.x2 - a.x1) * (a.y2 - a.y1))[0];
-  if (!best) return null;
+  let best = null;
+  for (const item of pool) {
+    const area = (item.x2 - item.x1) * (item.y2 - item.y1);
+    const rank = item.contrast * area ** 0.7;
+    if (!best || rank > best.rank) best = { ...item, rank };
+  }
   const refined = refineRect(best, integral, stride, w, h);
   const local = [
     { x: refined.x1, y: refined.y1 },
