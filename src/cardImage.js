@@ -1,7 +1,9 @@
-import { scanDocument } from "./documentScan.js";
+import { scanDocument, warpToCard } from "./documentScan.js";
+import { textUprightTurn } from "./textOrientation.js";
 
 const CARD_WIDTH_MM = 85.6;
 const CARD_HEIGHT_MM = 53.98;
+const CORNER_RADIUS_MM = 3.18;
 const PRINT_DPI = 300;
 const BRIGHTNESS = 1.12;
 const MAX_BYTES = 20 * 1024 * 1024;
@@ -36,11 +38,50 @@ export async function readCardFile(file, rotation = 0) {
   }
 }
 
+export async function renderCard(source, points) {
+  const warped = await warpToCard(source, points);
+  return paintCard(warped);
+}
+
 async function fitCard(bitmap, rotation) {
-  const manual = rotateToCanvas(bitmap, rotation);
-  const scanned = await scanDocument(manual);
-  const prepared = scanned ? trimDarkEdges(scanned) : legacyFit(manual);
-  return paintCard(faceUpright(prepared));
+  const source = rotateToCanvas(bitmap, rotation);
+  const detected = await scanDocument(source);
+  let points = detected || pointsFromFound(detectCard(source, { straight: true }), source);
+  points = await orientPoints(source, points);
+  return {
+    url: await renderCard(source, points),
+    source,
+    points,
+  };
+}
+
+async function orientPoints(source, points) {
+  const warped = await warpToCard(source, points);
+  const turn = await textUprightTurn(warped);
+  let current = points;
+  for (let step = 0; step < turn / 90; step += 1) {
+    current = [current[3], current[0], current[1], current[2]];
+  }
+  return current;
+}
+
+function pointsFromFound(found, source) {
+  if (found?.kind === "quad") return found.corners.map((point) => ({ x: point.x, y: point.y }));
+  if (found?.kind === "rect") {
+    return [
+      { x: found.x, y: found.y },
+      { x: found.x + found.width, y: found.y },
+      { x: found.x + found.width, y: found.y + found.height },
+      { x: found.x, y: found.y + found.height },
+    ];
+  }
+  const margin = 0.08;
+  return [
+    { x: source.width * margin, y: source.height * margin },
+    { x: source.width * (1 - margin), y: source.height * margin },
+    { x: source.width * (1 - margin), y: source.height * (1 - margin) },
+    { x: source.width * margin, y: source.height * (1 - margin) },
+  ];
 }
 
 function legacyFit(manual) {
@@ -149,12 +190,18 @@ function paintCard(source) {
   canvas.width = CARD_PX.width;
   canvas.height = CARD_PX.height;
   const ctx = canvas.getContext("2d");
+  const radius = (CORNER_RADIUS_MM / CARD_WIDTH_MM) * canvas.width;
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(0, 0, canvas.width, canvas.height, radius);
+  ctx.clip();
   ctx.filter = `brightness(${BRIGHTNESS})`;
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
   ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  ctx.restore();
   return canvas.toDataURL("image/jpeg", 0.95);
 }
 
