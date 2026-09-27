@@ -83,9 +83,9 @@ export default function AadhaarPrint() {
           <p className="eyebrow">Printouts</p>
           <h1>Aadhaar</h1>
           <p>
-            Upload the front and back. Extra background is cropped to the card
-            border, then both sides sit in one row at the top of the A4 sheet:
-            front on the left, back on the right.
+            Upload the front and back. Each photo is cropped to the card and
+            rotated upright, then both sides sit in one row at the top of the
+            A4 sheet: front on the left, back on the right.
           </p>
         </div>
         <button type="button" className="submit print-action" disabled={!ready || Boolean(busy)} onClick={printSheet}>
@@ -172,10 +172,6 @@ export default function AadhaarPrint() {
 function CardSlot({ side, photo }) {
   return (
     <div className={photo ? `card-slot ${side}` : `card-slot ${side} is-empty`}>
-      <i className="crop tl" aria-hidden="true" />
-      <i className="crop tr" aria-hidden="true" />
-      <i className="crop bl" aria-hidden="true" />
-      <i className="crop br" aria-hidden="true" />
       {photo ? (
         <img src={photo.url} alt={side === "front" ? "Aadhaar front" : "Aadhaar back"} />
       ) : (
