@@ -212,10 +212,25 @@ export default function LoginPage({ onSuccess }) {
             {submitting ? "Signing in…" : "Sign in"}
           </button>
 
-          <p className="footnote">
-            Need access? Ask your CSP Services administrator to issue an
-            account.
-          </p>
+          <div className="demo-note">
+            <p>
+              <strong>Demo login</strong>
+            </p>
+            <p>demo@cspservices.com</p>
+            <p>services123</p>
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => {
+                setEmail("demo@cspservices.com");
+                setPassword("services123");
+                setErrors({});
+                setFormError("");
+              }}
+            >
+              Use demo account
+            </button>
+          </div>
         </form>
       </section>
     </div>
