@@ -1,5 +1,6 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { readCardFile } from "./cardImage.js";
+import { loadOpenCv } from "./documentScan.js";
 
 const SIDES = [
   { id: "front", label: "Aadhaar front" },
@@ -15,6 +16,10 @@ export default function AadhaarPrint() {
     back: useRef(null),
   };
   const stageRef = useRef(null);
+
+  useEffect(() => {
+    loadOpenCv();
+  }, []);
 
   useLayoutEffect(() => {
     const node = stageRef.current;
@@ -130,7 +135,7 @@ export default function AadhaarPrint() {
                   {photo ? (
                     <img src={photo.url} alt="" />
                   ) : (
-                    <span>{busy === side.id ? "Cropping to the card…" : "Drop a photo or click to upload"}</span>
+                    <span>{busy === side.id ? "Finding the card…" : "Drop a photo or click to upload"}</span>
                   )}
                 </label>
                 <div className="side-actions">
